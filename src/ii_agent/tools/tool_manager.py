@@ -4,16 +4,21 @@ import logging
 from copy import deepcopy
 from typing import Optional, List, Dict, Any
 from ii_agent.llm.base import LLMClient
+from ii_agent.llm.context_manager.llm_summarizing import LLMSummarizingContextManager
+from ii_agent.llm.token_counter import TokenCounter
 from ii_agent.tools.advanced_tools.image_search_tool import ImageSearchTool
 from ii_agent.tools.base import LLMTool
 from ii_agent.llm.message_history import ToolCallParameters
-from ii_agent.tools.presentation_tool import PresentationTool
+from ii_agent.tools.memory.compactify_memory import CompactifyMemoryTool
+from ii_agent.tools.memory.simple_memory import SimpleMemoryTool
+from ii_agent.tools.slide_deck_tool import SlideDeckInitTool, SlideDeckCompleteTool
 from ii_agent.tools.web_search_tool import WebSearchTool
 from ii_agent.tools.visit_webpage_tool import VisitWebpageTool
 from ii_agent.tools.str_replace_tool_relative import StrReplaceEditorTool
 from ii_agent.tools.static_deploy_tool import StaticDeployTool
 from ii_agent.tools.sequential_thinking_tool import SequentialThinkingTool
-from ii_agent.tools.complete_tool import CompleteTool
+from ii_agent.tools.message_tool import MessageTool
+from ii_agent.tools.complete_tool import CompleteTool, ReturnControlToUserTool
 from ii_agent.tools.bash_tool import create_bash_tool, create_docker_bash_tool
 from ii_agent.browser.browser import Browser
 from ii_agent.utils import WorkspaceManager
@@ -33,7 +38,7 @@ from ii_agent.tools.browser_tools import (
     BrowserGetSelectOptionsTool,
     BrowserSelectDropdownOptionTool,
 )
-
+from ii_agent.tools.visualizer import DisplayImageTool
 from ii_agent.tools.advanced_tools.audio_tool import (
     AudioTranscribeTool,
     AudioGenerateTool,
@@ -68,8 +73,16 @@ def get_system_tools(
             ask_user_permission=ask_user_permission, cwd=workspace_manager.root
         )
 
+    logger = logging.getLogger("presentation_context_manager")
+    context_manager = LLMSummarizingContextManager(
+        client=client,
+        token_counter=TokenCounter(),
+        logger=logger,
+        token_budget=120_000,
+    )
+
     tools = [
-        SequentialThinkingTool(),
+        MessageTool(),
         WebSearchTool(),
         VisitWebpageTool(),
         StaticDeployTool(workspace_manager=workspace_manager),
@@ -78,11 +91,13 @@ def get_system_tools(
         ),
         bash_tool,
         ListHtmlLinksTool(workspace_manager=workspace_manager),
-        PresentationTool(
-            client=client,
+        SlideDeckInitTool(
             workspace_manager=workspace_manager,
-            message_queue=message_queue,
         ),
+        SlideDeckCompleteTool(
+            workspace_manager=workspace_manager,
+        ),
+        DisplayImageTool(workspace_manager=workspace_manager),
     ]
     image_search_tool = ImageSearchTool()
     if image_search_tool.is_available():
@@ -90,6 +105,8 @@ def get_system_tools(
 
     # Conditionally add tools based on tool_args
     if tool_args:
+        if tool_args.get("sequential_thinking", False):
+            tools.append(SequentialThinkingTool())
         if tool_args.get("deep_research", False):
             tools.append(DeepResearchTool())
         if tool_args.get("pdf", False):
@@ -113,6 +130,8 @@ def get_system_tools(
                     AudioGenerateTool(workspace_manager=workspace_manager),
                 ]
             )
+            
+        # Browser tools
         if tool_args.get("browser", False):
             browser = Browser()
             tools.extend(
@@ -132,7 +151,14 @@ def get_system_tools(
                     BrowserSelectDropdownOptionTool(browser=browser),
                 ]
             )
-        # Browser tools
+
+        memory_tool = tool_args.get("memory_tool")
+        if memory_tool == "compactify-memory":
+            tools.append(CompactifyMemoryTool(context_manager=context_manager))
+        elif memory_tool == "none":
+            pass
+        elif memory_tool == "simple":
+            tools.append(SimpleMemoryTool())
 
     return tools
 
@@ -151,9 +177,9 @@ class AgentToolManager:
     search capabilities, and task completion functionality.
     """
 
-    def __init__(self, tools: List[LLMTool], logger_for_agent_logs: logging.Logger):
+    def __init__(self, tools: List[LLMTool], logger_for_agent_logs: logging.Logger, interactive_mode: bool = True):
         self.logger_for_agent_logs = logger_for_agent_logs
-        self.complete_tool = CompleteTool()
+        self.complete_tool = ReturnControlToUserTool() if interactive_mode else CompleteTool()
         self.tools = tools
 
     def get_tool(self, tool_name: str) -> LLMTool:
@@ -190,7 +216,7 @@ class AgentToolManager:
         tool_input = tool_params.tool_input
         self.logger_for_agent_logs.info(f"Running tool: {tool_name}")
         self.logger_for_agent_logs.info(f"Tool input: {tool_input}")
-        result = llm_tool.run(tool_input, deepcopy(history))
+        result = llm_tool.run(tool_input, history)
 
         tool_input_str = "\n".join([f" - {k}: {v}" for k, v in tool_input.items()])
 

@@ -36,6 +36,7 @@ import { Button } from "@/components/ui/button";
 import {
   ActionStep,
   AgentEvent,
+  AVAILABLE_MODELS,
   IEvent,
   Message,
   TAB,
@@ -58,10 +59,10 @@ export default function Home() {
   const [activeFileCodeEditor, setActiveFileCodeEditor] = useState("");
   const [currentQuestion, setCurrentQuestion] = useState("");
   const [isCompleted, setIsCompleted] = useState(false);
+  const [isStopped, setIsStopped] = useState(false);
   const [workspaceInfo, setWorkspaceInfo] = useState("");
   const [isUploading, setIsUploading] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
-  const [isUseDeepResearch, setIsUseDeepResearch] = useState(false);
   const [deviceId, setDeviceId] = useState<string>("");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [isLoadingSession, setIsLoadingSession] = useState(false);
@@ -70,6 +71,15 @@ export default function Home() {
   );
   const [browserUrl, setBrowserUrl] = useState("");
   const [isGeneratingPrompt, setIsGeneratingPrompt] = useState(false);
+  const [editingMessage, setEditingMessage] = useState<Message>();
+  const [toolSettings, setToolSettings] = useState({
+    deep_research: false,
+    pdf: true,
+    media_generation: true,
+    audio_generation: true,
+    browser: true,
+  });
+  const [selectedModel, setSelectedModel] = useState<string>();
 
   const isReplayMode = useMemo(() => !!searchParams.get("id"), [searchParams]);
 
@@ -169,6 +179,16 @@ export default function Home() {
     setDeviceId(existingDeviceId);
   }, []);
 
+  // Add this useEffect to load the selected model from cookies
+  useEffect(() => {
+    const savedModel = Cookies.get("selected_model");
+    if (savedModel && AVAILABLE_MODELS.includes(savedModel)) {
+      setSelectedModel(savedModel);
+    } else {
+      setSelectedModel(AVAILABLE_MODELS[0]);
+    }
+  }, []);
+
   const handleEnhancePrompt = () => {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       toast.error("WebSocket connection is not open. Please try again.");
@@ -179,6 +199,7 @@ export default function Home() {
       JSON.stringify({
         type: "enhance_prompt",
         content: {
+          model_name: selectedModel,
           text: currentQuestion,
           files: uploadedFiles?.map((file) => `.${file}`),
         },
@@ -266,6 +287,7 @@ export default function Home() {
     setIsLoading(true);
     setCurrentQuestion("");
     setIsCompleted(false);
+    setIsStopped(false);
 
     if (!sessionId) {
       const id = `${workspaceInfo}`.split("/").pop();
@@ -295,13 +317,8 @@ export default function Home() {
         JSON.stringify({
           type: "init_agent",
           content: {
-            tool_args: {
-              deep_research: isUseDeepResearch,
-              pdf: true,
-              media_generation: true,
-              audio_generation: true,
-              browser: true,
-            },
+            model_name: selectedModel,
+            tool_args: toolSettings,
           },
         })
       );
@@ -336,6 +353,7 @@ export default function Home() {
     setMessages([]);
     setIsLoading(false);
     setIsCompleted(false);
+    setIsStopped(false);
   };
 
   const handleOpenVSCode = () => {
@@ -350,6 +368,46 @@ export default function Home() {
     } catch {
       return null;
     }
+  };
+
+  const handleEditMessage = (newQuestion: string) => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      toast.error("WebSocket connection is not open. Please try again.");
+      setIsLoading(false);
+      return;
+    }
+
+    socket.send(
+      JSON.stringify({
+        type: "edit_query",
+        content: {
+          text: newQuestion,
+          files: uploadedFiles?.map((file) => `.${file}`),
+        },
+      })
+    );
+
+    // Update the edited message and remove all subsequent messages
+    setMessages((prev) => {
+      // Find the index of the message being edited
+      const editIndex = prev.findIndex((m) => m.id === editingMessage?.id);
+      if (editIndex >= 0) {
+        // Create a new array with messages up to and including the edited one
+        const updatedMessages = prev.slice(0, editIndex + 1);
+        // Update the content of the edited message
+        updatedMessages[editIndex] = {
+          ...updatedMessages[editIndex],
+          content: newQuestion,
+        };
+        return updatedMessages;
+      }
+      return prev;
+    });
+
+    setIsCompleted(false);
+    setIsStopped(false);
+    setIsLoading(true);
+    setEditingMessage(undefined);
   };
 
   const handleFileUpload = async (
@@ -531,6 +589,17 @@ export default function Home() {
               timestamp: Date.now(),
             },
           ]);
+        } else if (data.content.tool_name === TOOL.MESSAGE_USER) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: data.id,
+              role: "assistant",
+              content: (data.content.tool_input as { text: string })
+                .text as string,
+              timestamp: Date.now(),
+            },
+          ]);
         } else {
           const message: Message = {
             id: data.id,
@@ -613,7 +682,8 @@ export default function Home() {
         } else {
           if (
             data.content.tool_name !== TOOL.SEQUENTIAL_THINKING &&
-            data.content.tool_name !== TOOL.PRESENTATION
+            data.content.tool_name !== TOOL.PRESENTATION &&
+            data.content.tool_name !== TOOL.MESSAGE_USER
           ) {
             // TODO: Implement helper function to handle tool results
             setMessages((prev) => {
@@ -709,6 +779,23 @@ export default function Home() {
     const url = `${window.location.origin}/?id=${sessionId}`;
     navigator.clipboard.writeText(url);
     toast.success("Copied to clipboard");
+  };
+
+  const handleCancelQuery = () => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      toast.error("WebSocket connection is not open.");
+      return;
+    }
+
+    // Send cancel message to the server
+    socket.send(
+      JSON.stringify({
+        type: "cancel",
+        content: {},
+      })
+    );
+    setIsLoading(false);
+    setIsStopped(true);
   };
 
   useEffect(() => {
@@ -859,11 +946,13 @@ export default function Home() {
                 handleSubmit={handleQuestionSubmit}
                 handleFileUpload={handleFileUpload}
                 isUploading={isUploading}
-                isUseDeepResearch={isUseDeepResearch}
-                setIsUseDeepResearch={setIsUseDeepResearch}
                 isDisabled={!socket || socket.readyState !== WebSocket.OPEN}
                 isGeneratingPrompt={isGeneratingPrompt}
                 handleEnhancePrompt={handleEnhancePrompt}
+                toolSettings={toolSettings}
+                setToolSettings={setToolSettings}
+                selectedModel={selectedModel}
+                setSelectedModel={setSelectedModel}
               />
             ) : (
               <motion.div
@@ -883,10 +972,10 @@ export default function Home() {
                   messages={messages}
                   isLoading={isLoading}
                   isCompleted={isCompleted}
+                  isStopped={isStopped}
                   workspaceInfo={workspaceInfo}
                   handleClickAction={handleClickAction}
                   isUploading={isUploading}
-                  isUseDeepResearch={isUseDeepResearch}
                   isReplayMode={isReplayMode}
                   currentQuestion={currentQuestion}
                   messagesEndRef={messagesEndRef}
@@ -896,6 +985,10 @@ export default function Home() {
                   handleFileUpload={handleFileUpload}
                   isGeneratingPrompt={isGeneratingPrompt}
                   handleEnhancePrompt={handleEnhancePrompt}
+                  handleCancel={handleCancelQuery}
+                  editingMessage={editingMessage}
+                  setEditingMessage={setEditingMessage}
+                  handleEditMessage={handleEditMessage}
                 />
 
                 <div className="col-span-6 bg-[#1e1f23] border border-[#3A3B3F] p-4 rounded-2xl">

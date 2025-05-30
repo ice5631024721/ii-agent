@@ -4,6 +4,13 @@ export enum TAB {
   TERMINAL = "terminal",
 }
 
+export const AVAILABLE_MODELS = [
+  "claude-3-7-sonnet@20250219",
+  "claude-sonnet-4@20250514",
+  "claude-opus-4@20250514",
+  // "gemini-2.5-pro-preview-05-06",
+];
+
 export type Source = {
   title: string;
   url: string;
@@ -30,6 +37,7 @@ export enum AgentEvent {
 
 export enum TOOL {
   SEQUENTIAL_THINKING = "sequential_thinking",
+  MESSAGE_USER = "message_user",
   STR_REPLACE_EDITOR = "str_replace_editor",
   BROWSER_USE = "browser_use",
   PRESENTATION = "presentation",
@@ -46,6 +54,7 @@ export enum TOOL {
   IMAGE_GENERATE = "generate_image_from_text",
   DEEP_RESEARCH = "deep_research",
   LIST_HTML_LINKS = "list_html_links",
+  RETURN_CONTROL_TO_USER = "return_control_to_user",
   // browser tools
   BROWSER_VIEW = "browser_view",
   BROWSER_NAVIGATION = "browser_navigation",
@@ -117,4 +126,12 @@ export interface IEvent {
   };
   timestamp: string;
   workspace_dir: string;
+}
+
+export interface ToolSettings {
+  deep_research: boolean;
+  pdf: boolean;
+  media_generation: boolean;
+  audio_generation: boolean;
+  browser: boolean;
 }

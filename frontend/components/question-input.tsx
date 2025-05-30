@@ -1,18 +1,27 @@
 import { motion } from "framer-motion";
-import { ArrowUp, Loader2, Paperclip } from "lucide-react";
+import { ArrowUp, Loader2, Paperclip, Settings2 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { getFileIconAndColor } from "@/utils/file-utils";
 import Image from "next/image";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+import SettingsDrawer from "./settings-drawer";
+
+interface ToolSettings {
+  deep_research: boolean;
+  pdf: boolean;
+  media_generation: boolean;
+  audio_generation: boolean;
+  browser: boolean;
+}
 
 interface FileUploadStatus {
   name: string;
   loading: boolean;
   error?: string;
-  preview?: string; // Add preview URL for images
-  isImage: boolean; // Flag to identify image files
+  preview?: string;
+  isImage: boolean;
 }
 
 interface QuestionInputProps {
@@ -25,11 +34,15 @@ interface QuestionInputProps {
   handleSubmit: (question: string) => void;
   handleFileUpload?: (e: React.ChangeEvent<HTMLInputElement>) => void;
   isUploading?: boolean;
-  isUseDeepResearch?: boolean;
-  setIsUseDeepResearch?: (value: boolean) => void;
   isDisabled?: boolean;
   isGeneratingPrompt?: boolean;
   handleEnhancePrompt?: () => void;
+  isLoading?: boolean;
+  handleCancel?: () => void;
+  toolSettings?: ToolSettings;
+  setToolSettings?: (settings: ToolSettings) => void;
+  selectedModel?: string;
+  setSelectedModel?: (model: string) => void;
 }
 
 const QuestionInput = ({
@@ -42,13 +55,67 @@ const QuestionInput = ({
   handleSubmit,
   handleFileUpload,
   isUploading = false,
-  isUseDeepResearch = false,
-  setIsUseDeepResearch,
   isDisabled,
   isGeneratingPrompt = false,
   handleEnhancePrompt,
+  isLoading = false,
+  handleCancel,
+  toolSettings,
+  setToolSettings,
+  selectedModel,
+  setSelectedModel,
 }: QuestionInputProps) => {
   const [files, setFiles] = useState<FileUploadStatus[]>([]);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Initialize default tool settings if not provided
+  const [localToolSettings, setLocalToolSettings] = useState<ToolSettings>({
+    deep_research: false,
+    pdf: true,
+    media_generation: true,
+    audio_generation: true,
+    browser: true,
+  });
+
+  // Use either provided tool settings or local state
+  const currentToolSettings = toolSettings || localToolSettings;
+  const updateToolSettings = setToolSettings || setLocalToolSettings;
+
+  // Handle key down events with auto-scroll for Shift+Enter
+  const handleKeyDownWithAutoScroll = (
+    e: React.KeyboardEvent<HTMLTextAreaElement>
+  ) => {
+    if (e.key === "Enter") {
+      if (e.shiftKey) {
+        // Check if cursor is at the last line before allowing default behavior
+        const textarea = textareaRef.current;
+        if (textarea) {
+          const cursorPosition = textarea.selectionStart;
+          const text = textarea.value;
+
+          // Check if cursor is at or near the end of the text
+          const isAtLastLine = !text.substring(cursorPosition).includes("\n");
+
+          // Allow default behavior for Shift+Enter (new line)
+          // Only schedule auto-scroll if we're at the last line
+          if (isAtLastLine) {
+            setTimeout(() => {
+              if (textarea) {
+                textarea.scrollTop = textarea.scrollHeight;
+              }
+            }, 0);
+          }
+        }
+      } else {
+        // Original behavior for Enter key
+        handleKeyDown(e);
+      }
+    } else {
+      // Pass other key events to the original handler
+      handleKeyDown(e);
+    }
+  };
 
   // Clean up object URLs when component unmounts
   useEffect(() => {
@@ -122,6 +189,15 @@ const QuestionInput = ({
       }}
       className={`w-full max-w-2xl z-50 ${className}`}
     >
+      <SettingsDrawer
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        toolSettings={currentToolSettings}
+        setToolSettings={updateToolSettings}
+        selectedModel={selectedModel}
+        setSelectedModel={setSelectedModel}
+      />
+
       <motion.div
         className="relative rounded-xl"
         initial={{ y: 20, opacity: 0 }}
@@ -201,7 +277,8 @@ const QuestionInput = ({
           }
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          onKeyDown={handleKeyDown}
+          onKeyDown={handleKeyDownWithAutoScroll}
+          ref={textareaRef}
         />
         <div className="flex justify-between items-center absolute bottom-0 py-4 m-px w-[calc(100%-4px)] rounded-b-xl bg-[#35363a]  px-4">
           <div className="flex items-center gap-x-3">
@@ -214,7 +291,7 @@ const QuestionInput = ({
                   onClick={() =>
                     document.getElementById("file-upload")?.click()
                   }
-                  disabled={isUploading}
+                  disabled={isUploading || isLoading}
                 >
                   {isUploading ? (
                     <Loader2 className="size-5 text-gray-400 animate-spin" />
@@ -228,28 +305,31 @@ const QuestionInput = ({
                   multiple
                   className="hidden"
                   onChange={handleFileChange}
-                  disabled={isUploading}
+                  disabled={isUploading || isLoading}
                 />
               </label>
             )}
-            {setIsUseDeepResearch && (
-              <Button
-                variant="outline"
-                className={`h-10 cursor-pointer shadow-sm ${
-                  isUseDeepResearch
-                    ? "bg-gradient-skyblue-lavender !text-black"
-                    : "border !border-[#ffffff0f] bg-transparent"
-                }`}
-                onClick={() => setIsUseDeepResearch?.(!isUseDeepResearch)}
-              >
-                Deep Research
-              </Button>
+            {typeof setSelectedModel === "function" && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="hover:bg-gray-700/50 size-10 rounded-full cursor-pointer border border-[#ffffff0f] shadow-sm"
+                    onClick={() => setIsSettingsOpen(true)}
+                    disabled={isLoading}
+                  >
+                    <Settings2 className="size-5 text-gray-400" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Settings</TooltipContent>
+              </Tooltip>
             )}
           </div>
 
           <div className="flex items-center gap-x-2">
             <Tooltip>
-              <TooltipTrigger>
+              <TooltipTrigger asChild>
                 <Button
                   variant="ghost"
                   size="icon"
@@ -271,13 +351,22 @@ const QuestionInput = ({
               </TooltipTrigger>
               <TooltipContent>Enhance Prompt</TooltipContent>
             </Tooltip>
-            <Button
-              disabled={!value.trim() || isDisabled}
-              onClick={() => handleSubmit(value)}
-              className="cursor-pointer !border !border-red p-4 size-10 font-bold bg-gradient-skyblue-lavender rounded-full hover:scale-105 active:scale-95 transition-transform shadow-[0_4px_10px_rgba(0,0,0,0.2)]"
-            >
-              <ArrowUp className="size-5" />
-            </Button>
+            {isLoading && handleCancel ? (
+              <Button
+                onClick={handleCancel}
+                className="cursor-pointer size-10 font-bold p-0 !bg-black rounded-full hover:scale-105 active:scale-95 transition-transform shadow-[0_4px_10px_rgba(0,0,0,0.2)]"
+              >
+                <div className="size-3 rounded-xs bg-white" />
+              </Button>
+            ) : (
+              <Button
+                disabled={!value.trim() || isDisabled || isLoading}
+                onClick={() => handleSubmit(value)}
+                className="cursor-pointer !border !border-red p-4 size-10 font-bold bg-gradient-skyblue-lavender rounded-full hover:scale-105 active:scale-95 transition-transform shadow-[0_4px_10px_rgba(0,0,0,0.2)]"
+              >
+                <ArrowUp className="size-5" />
+              </Button>
+            )}
           </div>
         </div>
       </motion.div>
