@@ -28,6 +28,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     gnupg \
     lsb-release \
+    ffmpeg \
     xvfb \
     && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
     && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list \
@@ -50,6 +51,10 @@ RUN playwright install --with-deps chromium
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
+ENV FILE_STORE=local
+ENV FILE_STORE_PATH=/.ii_agent_file_store
+
+RUN mkdir -p $FILE_STORE_PATH
 
 COPY docker/backend/run.sh /app/run.sh
 RUN chmod +x /app/run.sh

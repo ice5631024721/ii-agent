@@ -23,10 +23,11 @@ Send a message to the user. Use this tool to communicate effectively in a variet
         "required": ["text"],
     }
 
-    def run_impl(
+    async def run_impl(
         self,
         tool_input: dict[str, Any],
         message_history: Optional[MessageHistory] = None,
     ) -> ToolImplOutput:
         assert tool_input["text"], "Model returned empty message"
-        return ToolImplOutput(f"{tool_input['text']}", f"{tool_input['text']}")
+        msg = "Sent message to user"
+        return ToolImplOutput(msg, msg, auxiliary_data={"success": True})

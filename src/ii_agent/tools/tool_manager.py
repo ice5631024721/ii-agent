@@ -6,7 +6,7 @@ from typing import Optional, List, Dict, Any
 from ii_agent.llm.base import LLMClient
 from ii_agent.llm.context_manager.llm_summarizing import LLMSummarizingContextManager
 from ii_agent.llm.token_counter import TokenCounter
-from ii_agent.tools.advanced_tools.image_search_tool import ImageSearchTool
+from ii_agent.tools.image_search_tool import ImageSearchTool
 from ii_agent.tools.base import LLMTool
 from ii_agent.llm.message_history import ToolCallParameters
 from ii_agent.tools.memory.compactify_memory import CompactifyMemoryTool
@@ -18,7 +18,7 @@ from ii_agent.tools.str_replace_tool_relative import StrReplaceEditorTool
 from ii_agent.tools.static_deploy_tool import StaticDeployTool
 from ii_agent.tools.sequential_thinking_tool import SequentialThinkingTool
 from ii_agent.tools.message_tool import MessageTool
-from ii_agent.tools.complete_tool import CompleteTool, ReturnControlToUserTool
+from ii_agent.tools.complete_tool import CompleteTool, ReturnControlToUserTool, CompleteToolReviewer, ReturnControlToGeneralAgentTool
 from ii_agent.tools.bash_tool import create_bash_tool, create_docker_bash_tool
 from ii_agent.browser.browser import Browser
 from ii_agent.utils import WorkspaceManager
@@ -39,15 +39,21 @@ from ii_agent.tools.browser_tools import (
     BrowserSelectDropdownOptionTool,
 )
 from ii_agent.tools.visualizer import DisplayImageTool
-from ii_agent.tools.advanced_tools.audio_tool import (
+from ii_agent.tools.audio_tool import (
     AudioTranscribeTool,
     AudioGenerateTool,
 )
-from ii_agent.tools.advanced_tools.video_gen_tool import VideoGenerateFromTextTool
-from ii_agent.tools.advanced_tools.image_gen_tool import ImageGenerateTool
-from ii_agent.tools.advanced_tools.pdf_tool import PdfTextExtractTool
+from ii_agent.tools.video_gen_tool import (
+    VideoGenerateFromTextTool,
+    VideoGenerateFromImageTool,
+    LongVideoGenerateFromTextTool,
+    LongVideoGenerateFromImageTool,
+)
+from ii_agent.tools.image_gen_tool import ImageGenerateTool
+from ii_agent.tools.pdf_tool import PdfTextExtractTool
 from ii_agent.tools.deep_research_tool import DeepResearchTool
 from ii_agent.tools.list_html_links_tool import ListHtmlLinksTool
+from ii_agent.utils.constants import TOKEN_BUDGET
 
 
 def get_system_tools(
@@ -78,7 +84,7 @@ def get_system_tools(
         client=client,
         token_counter=TokenCounter(),
         logger=logger,
-        token_budget=120_000,
+        token_budget=TOKEN_BUDGET,
     )
 
     tools = [
@@ -112,15 +118,17 @@ def get_system_tools(
         if tool_args.get("pdf", False):
             tools.append(PdfTextExtractTool(workspace_manager=workspace_manager))
         if tool_args.get("media_generation", False) and (
-            os.environ.get("GOOGLE_CLOUD_PROJECT")
-            and os.environ.get("GOOGLE_CLOUD_REGION")
+            os.environ.get("MEDIA_GCP_PROJECT_ID")
+            and os.environ.get("MEDIA_GCP_LOCATION")
         ):
-            tools.extend(
-                [
-                    ImageGenerateTool(workspace_manager=workspace_manager),
-                    VideoGenerateFromTextTool(workspace_manager=workspace_manager),
-                ]
-            )
+            tools.append(ImageGenerateTool(workspace_manager=workspace_manager))
+            if tool_args.get("video_generation", False):
+                tools.extend([
+                    VideoGenerateFromTextTool(workspace_manager=workspace_manager), 
+                    VideoGenerateFromImageTool(workspace_manager=workspace_manager),
+                    LongVideoGenerateFromTextTool(workspace_manager=workspace_manager),
+                    LongVideoGenerateFromImageTool(workspace_manager=workspace_manager)
+                ])
         if tool_args.get("audio_generation", False) and (
             os.environ.get("OPEN_API_KEY") and os.environ.get("AZURE_OPENAI_ENDPOINT")
         ):
@@ -177,9 +185,12 @@ class AgentToolManager:
     search capabilities, and task completion functionality.
     """
 
-    def __init__(self, tools: List[LLMTool], logger_for_agent_logs: logging.Logger, interactive_mode: bool = True):
+    def __init__(self, tools: List[LLMTool], logger_for_agent_logs: logging.Logger, interactive_mode: bool = True, reviewer_mode: bool = False):
         self.logger_for_agent_logs = logger_for_agent_logs
-        self.complete_tool = ReturnControlToUserTool() if interactive_mode else CompleteTool()
+        if reviewer_mode:
+            self.complete_tool = ReturnControlToGeneralAgentTool() if interactive_mode else CompleteToolReviewer()
+        else:
+            self.complete_tool = ReturnControlToUserTool() if interactive_mode else CompleteTool()
         self.tools = tools
 
     def get_tool(self, tool_name: str) -> LLMTool:
@@ -201,12 +212,12 @@ class AgentToolManager:
         except StopIteration:
             raise ValueError(f"Tool with name {tool_name} not found")
 
-    def run_tool(self, tool_params: ToolCallParameters, history: MessageHistory):
+    async def run_tool(self, tool_params: ToolCallParameters, history: MessageHistory):
         """
-        Executes a llm tool.
+        Executes a llm tool asynchronously.
 
         Args:
-            tool (LLMTool): The tool to execute.
+            tool_params (ToolCallParameters): The tool parameters.
             history (MessageHistory): The history of the conversation.
         Returns:
             ToolResult: The result of the tool execution.
@@ -216,7 +227,7 @@ class AgentToolManager:
         tool_input = tool_params.tool_input
         self.logger_for_agent_logs.info(f"Running tool: {tool_name}")
         self.logger_for_agent_logs.info(f"Tool input: {tool_input}")
-        result = llm_tool.run(tool_input, history)
+        result = await llm_tool.run_async(tool_input, history)
 
         tool_input_str = "\n".join([f" - {k}: {v}" for k, v in tool_input.items()])
 
